@@ -9,33 +9,33 @@ Fork from the memcached-1.4.15
 
 ## Features
 
-> intervally save the cache content to disk.
+* intervally save the cache content to disk.
 
-> can specify the number of persitence history.
+* can specify the number of persitence history.
 
-> the disk space taken will not increase infinitely.
+* the disk space taken will not increase infinitely.
 
-  <the disk space needed> = <memory of memcached> * <number of persitence history>
+  [the disk space needed] = [memory of memcached] \* [number of persitence history]
 
-> at least one persistence file is valid.
+* at least one persistence file is valid.
 
-> when the memcached is stopped or crashed,
+* when the memcached is stopped or crashed,
 
   the last valid persistence is not consistent with the contents in memory.
 
-> the overhead of persistence is about 25%, according to my test.
+* the overhead of persistence is about 25%, according to my test.
 
 ## usage
 
-> -w to enable warmup module
+* -w to enable warmup module
 
-> -W to enable persistence module
+* -W to enable persistence module
 
-> -y to specify the persistence interval
+* -y to specify the persistence interval
 
 ## contact
 
-  lmsscg@gmail.com
+* lmsscg@gmail.com
 
 
 ############################################################################
