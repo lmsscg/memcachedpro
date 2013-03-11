@@ -288,6 +288,53 @@ static void item_unlink_q(item *it) {
     return;
 }
 
+// [persistence]
+int pst_item_link(item *it, const uint32_t hv) {
+    MEMCACHED_ITEM_LINK(ITEM_key(it), it->nkey, it->nbytes);
+    it->it_flags &= ~(ITEM_LINKED|ITEM_SLABBED);
+    it->refcount = 0;
+    assert((it->it_flags & (ITEM_LINKED|ITEM_SLABBED)) == 0);
+    mutex_lock(&cache_lock);
+    it->it_flags |= ITEM_LINKED;
+
+    STATS_LOCK();
+    stats.curr_bytes += ITEM_ntotal(it);
+    stats.curr_items += 1;
+    stats.total_items += 1;
+    STATS_UNLOCK();
+
+    /* Allocate a new CAS ID on link. */
+    ITEM_set_cas(it, (settings.use_cas) ? get_cas_id() : 0);
+    assoc_insert(it, hv);
+    item_link_q(it);
+    refcount_incr(&it->refcount);
+    mutex_unlock(&cache_lock);
+
+    return 1;
+}
+
+// [persistence]
+int pst_store_item(item *it) {
+  uint32_t hv = hash(ITEM_key(it), it->nkey, 0);
+  char *key = ITEM_key(it);
+  int flags = (int) strtol(ITEM_suffix(it), (char **) NULL, 10);
+
+  item *new_it = do_item_alloc(key, it->nkey, flags, it->exptime,
+                               it->nbytes /* CRLF */, hv);
+  if (new_it == NULL) {
+    /* SERVER_ERROR out of memory */
+    fprintf(stderr, "[persistent] server outof memory\n");
+    return -1;
+  }
+  new_it->time = it->time;
+
+  /* copy data from it and old_it to new_it */
+  memcpy(ITEM_data(new_it), ITEM_data(it), it->nbytes);
+  pst_item_link(new_it, hv);
+  return 0;
+}
+
+
 int do_item_link(item *it, const uint32_t hv) {
     MEMCACHED_ITEM_LINK(ITEM_key(it), it->nkey, it->nbytes);
     assert((it->it_flags & (ITEM_LINKED|ITEM_SLABBED)) == 0);

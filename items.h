@@ -6,6 +6,8 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
 void item_free(item *it);
 bool item_size_ok(const size_t nkey, const int flags, const int nbytes);
 
+int pst_store_item(item *it);
+int  pst_item_link(item *it, const uint32_t hv);  // [persistence]
 int  do_item_link(item *it, const uint32_t hv);     /** may fail if transgresses limits */
 void do_item_unlink(item *it, const uint32_t hv);
 void do_item_unlink_nolock(item *it, const uint32_t hv);

@@ -16,6 +16,7 @@
 #include <sys/socket.h>
 #include <sys/signal.h>
 #include <sys/resource.h>
+#include <sys/time.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <errno.h>
@@ -38,7 +39,7 @@ unsigned int hashpower = HASHPOWER_DEFAULT;
 #define hashmask(n) (hashsize(n)-1)
 
 /* Main hash table. This is where we look except during expansion. */
-static item** primary_hashtable = 0;
+item** primary_hashtable = 0;
 
 /*
  * Previous hash table. During expansion, we look here for keys that haven't
@@ -206,16 +207,55 @@ static void *assoc_maintenance_thread(void *arg) {
     while (do_run_maintenance_thread) {
         int ii = 0;
 
+        struct timeval stv;
+        gettimeofday(&stv, NULL);
+
+        size_t bo = 0; // buffer offset
+        int bn = 0;    // items number
+        size_t bz = 0; // buffer size
+
         /* Lock the cache, and bulk move multiple buckets to the new
          * hash table. */
         item_lock_global();
         mutex_lock(&cache_lock);
+
+        /* caculate the size of bucket_buffer, this loop is Basically a copy of the loop after this block */
+        if (settings.pst) {
+          unsigned int tmp_expand_bucket = expand_bucket;
+          bool tmp_expanding = expanding;
+
+          for (ii = 0; ii < hash_bulk_move && tmp_expanding; ++ii) {
+            item *it, *next;
+            for (it = old_hashtable[tmp_expand_bucket]; NULL != it;
+              it = next){
+              next = it->h_next;
+              /* we save the length of item ahead of the item structure*/
+              bz += sizeof(size_t) + ITEM_ntotal(it);
+              bn++;
+            }
+            tmp_expand_bucket++;
+            if (tmp_expand_bucket == hashsize(hashpower - 1)) {
+              tmp_expanding = false;
+            }
+          }
+        }
+
+        /* the buffer to hold the items in a bucket */
+        char bucket_buffer[bz];
+
 
         for (ii = 0; ii < hash_bulk_move && expanding; ++ii) {
             item *it, *next;
             int bucket;
 
             for (it = old_hashtable[expand_bucket]; NULL != it; it = next) {
+                /* copy the item into bucket_buffer */
+                if (settings.pst) {
+                  if (settings.verbose > 3)
+                    fprintf(stderr, "[persistence] bz = %ld, bo = %ld\n",
+                          bz,bo);
+                  bo += pst_bucket_ing(it, (char *)(&bucket_buffer[bo]));
+                }
                 next = it->h_next;
 
                 bucket = hash(ITEM_key(it), it->nkey, 0) & hashmask(hashpower);
@@ -241,14 +281,36 @@ static void *assoc_maintenance_thread(void *arg) {
         mutex_unlock(&cache_lock);
         item_unlock_global();
 
+        struct timeval etv;
+        gettimeofday(&etv, NULL);
+        if (settings.verbose >= 3) {
+          fprintf(stderr, "[persistence] scan bucket[%d] time: %ld:%ld\n",
+                  bn, etv.tv_sec - stv.tv_sec, etv.tv_usec - stv.tv_usec);
+        }
+
+        /* write the bucket_buffer to persistence file */
+        if (settings.pst) {
+          pst_bucket_end(bucket_buffer, bo);
+        }
+
         if (!expanding) {
             /* finished expanding. tell all threads to use fine-grained locks */
             switch_item_lock_type(ITEM_LOCK_GRANULAR);
             slabs_rebalancer_resume();
+            /* after scanning the hash table, close the persistence file,
+               and enable the persistence thread */
+            if (settings.pst) {
+              pst_close();
+              enable_pst_thread();
+            }
             /* We are done expanding.. just wait for next invocation */
             mutex_lock(&cache_lock);
             started_expanding = false;
             pthread_cond_wait(&maintenance_cond, &cache_lock);
+            /* before start expanding, disable the persistence thread */
+            if (settings.pst) {
+              disable_pst_thread();
+            }
             /* Before doing anything, tell threads to use a global lock */
             mutex_unlock(&cache_lock);
             slabs_rebalancer_pause();
@@ -256,6 +318,10 @@ static void *assoc_maintenance_thread(void *arg) {
             mutex_lock(&cache_lock);
             assoc_expand();
             mutex_unlock(&cache_lock);
+            /* init the persistence process */
+            if (settings.pst) {
+              pst_init("embed");
+            }
         }
     }
     return NULL;

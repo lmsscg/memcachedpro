@@ -307,6 +307,12 @@ struct settings {
     bool slab_reassign;     /* Whether or not slab reassignment is allowed */
     int slab_automove;     /* Whether or not to automatically move slabs */
     int hashpower_init;     /* Starting hash power level */
+
+    bool warmup;            /* [persistence] whether to warmup */
+    char *warmup_path;      /* [persistence] warmup file path */
+    bool pst;               /* [persistence] whether to persistence */
+    char *pst_path;         /* [persistence] persistence file path */
+    int pst_interval;        /* [persistence] persistence interval */
 };
 
 extern struct stats stats;
@@ -503,6 +509,7 @@ static inline int mutex_lock(pthread_mutex_t *mutex)
 #include "trace.h"
 #include "hash.h"
 #include "util.h"
+#include "pro_persistence.h"  // [persistence]
 
 /*
  * Functions such as the libevent-related calls that need to do cross-thread

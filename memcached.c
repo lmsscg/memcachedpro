@@ -77,6 +77,7 @@ static void conn_set_state(conn *c, enum conn_states state);
 static void stats_init(void);
 static void server_stats(ADD_STAT add_stats, conn *c);
 static void process_stat_settings(ADD_STAT add_stats, void *c);
+static void process_stat_persistence(ADD_STAT add_stats, void *c);
 
 
 /* defaults */
@@ -225,6 +226,13 @@ static void settings_init(void) {
     settings.hashpower_init = 0;
     settings.slab_reassign = false;
     settings.slab_automove = 0;
+    /* [persistence] */
+    settings.pst = false;
+    settings.pst_path = default_path;
+    settings.warmup = false;
+    settings.warmup_path = default_path;
+    settings.pst_interval = pst_interval;
+    /* [persistence] */
 }
 
 /*
@@ -1492,6 +1500,8 @@ static void process_bin_stat(conn *c) {
         stats_reset();
     } else if (strncmp(subcommand, "settings", 8) == 0) {
         process_stat_settings(&append_stats, c);
+    } else if (strncmp(subcommand, "pst", 11) == 0) {
+        process_stat_persistence(&append_stats, c);  // [persistence]
     } else if (strncmp(subcommand, "detail", 6) == 0) {
         char *subcmd_pos = subcommand + 6;
         if (strncmp(subcmd_pos, " dump", 5) == 0) {
@@ -2592,6 +2602,24 @@ static void server_stats(ADD_STAT add_stats, conn *c) {
     STATS_UNLOCK();
 }
 
+/* get stat of [persistence] */
+static void process_stat_persistence(ADD_STAT add_stats, void *c) {
+  assert(add_stats);
+  APPEND_STAT("pst_option", "%s", settings.pst ? "True" : "False");
+  APPEND_STAT("wu_option", "%s", settings.warmup ? "True" : "False");
+  APPEND_STAT("pst_thread", "%d", pst_stat.pst_thread);
+  APPEND_STAT("pst_enable", "%d", pst_stat.pst_enable);
+  APPEND_STAT("psting", "%d", pst_stat.psting);
+  APPEND_STAT("wu_running", "%d", pst_stat.wu_running);
+  APPEND_STAT("wu_num", "%llu", pst_stat.wu_num);
+  APPEND_STAT("pst_num", "%llu", pst_stat.pst_num);
+  APPEND_STAT("expired_num", "%llu", pst_stat.expired_num);
+  APPEND_STAT("flushed_num", "%llu", pst_stat.flushed_num);
+  APPEND_STAT("cur_init", "%ld", pst_stat.cur_init);
+  APPEND_STAT("cur_close", "%ld", pst_stat.cur_close);
+  APPEND_STAT("pst_last", "%d", pst_stat.pst_last);
+}
+
 static void process_stat_settings(ADD_STAT add_stats, void *c) {
     assert(add_stats);
     APPEND_STAT("maxbytes", "%u", (unsigned int)settings.maxbytes);
@@ -2651,6 +2679,8 @@ static void process_stat(conn *c, token_t *tokens, const size_t ntokens) {
         return ;
     } else if (strcmp(subcommand, "settings") == 0) {
         process_stat_settings(&append_stats, c);
+    } else if (strcmp(subcommand, "pst") == 0) {  // [persistence]
+        process_stat_persistence(&append_stats, c);
     } else if (strcmp(subcommand, "cachedump") == 0) {
         char *buf;
         unsigned int bytes, id, limit = 0;
@@ -4502,6 +4532,10 @@ static void usage(void) {
            "                Set this based on \"STAT hash_power_level\" before a \n"
            "                restart.\n"
            );
+    /* [persistence] */
+    printf("-w <path>     Turn on warmup.\n");
+    printf("-W <path>     Turn on persistence.\n");
+    printf("-y <seconds>  The interval between persistence. (default 60)\n");
     return;
 }
 
@@ -4774,8 +4808,24 @@ int main (int argc, char **argv) {
           "I:"  /* Max item size */
           "S"   /* Sasl ON */
           "o:"  /* Extended generic options */
+          "w:"  /* do warmup [persistence] */
+          "W:"  /* do persistence [persistence] */
+          "y:"  /* pst interval [persistence] */
         ))) {
         switch (c) {
+        /* [persistence] */
+        case 'w':
+            settings.warmup = true;
+            settings.warmup_path = optarg;
+            break;
+        case 'W':
+            settings.pst = true;
+            settings.pst_path = optarg;
+            break;
+        case 'y':
+            settings.pst_interval = atoi(optarg);
+            break;
+        /* [persistence] */
         case 'a':
             /* access for unix domain socket, as octal mask (like chmod)*/
             settings.access= strtol(optarg,NULL,8);
@@ -5141,8 +5191,20 @@ int main (int argc, char **argv) {
     /* start up worker threads if MT mode */
     thread_init(settings.num_threads, main_base);
 
+    /* [persistence] do warmup */
+    if (settings.warmup) {
+      pst_warmup();
+    }
+
     if (start_assoc_maintenance_thread() == -1) {
         exit(EXIT_FAILURE);
+    }
+
+    /* [persistence] start up persistence thread */
+    if (settings.pst) {
+      if (start_pst_thread() < 0) {
+          exit(EXIT_FAILURE);
+      }
     }
 
     if (settings.slab_reassign &&
@@ -5229,6 +5291,10 @@ int main (int argc, char **argv) {
         retval = EXIT_FAILURE;
     }
 
+    /* [persistence] stop persistence thread */
+    if (settings.pst) {
+      stop_pst_thread();
+    }
     stop_assoc_maintenance_thread();
 
     /* remove the PID file if we're a daemon */
